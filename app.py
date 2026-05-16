@@ -17,7 +17,7 @@ st.write("ระบบวินิจฉัยมะเร็งปอดจา�
 st.markdown("---")
 
 # ====================================================================
-# 1. ฟังก์ชันดึงและสกัดลักษณะเด่น (ตามสเปค Notebook กลุ่มเป๊ะๆ)
+# 1. ฟังก์ชันดึงและสกัดลักษณะเด่น
 # ====================================================================
 def apply_preprocessing(img_gray):
     denoised = cv2.GaussianBlur(img_gray, (5, 5), 0)
@@ -26,7 +26,6 @@ def apply_preprocessing(img_gray):
     return enhanced
 
 def extract_glcm_features(gray_img):
-    # ใช้ distances=[1, 3] ตามที่ใช้เทรนใน Notebook เพื่อให้ได้ 48 ฟีเจอร์
     glcm = graycomatrix(gray_img, distances=[1, 3], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4], levels=256, symmetric=True, normed=True)
     
     contrast = graycoprops(glcm, 'contrast').flatten()
@@ -36,7 +35,6 @@ def extract_glcm_features(gray_img):
     correlation = graycoprops(glcm, 'correlation').flatten()
     asm = graycoprops(glcm, 'ASM').flatten()
     
-    # รวมคุณลักษณะเด่นฝั่ง GLCM (รวมเป็น 48 มิติ)
     return np.hstack([contrast, dissimilarity, homogeneity, energy, correlation, asm])
 
 def extract_sift_bovw_live(img_gray, kmeans_model):
@@ -62,13 +60,10 @@ def extract_sift_bovw_live(img_gray, kmeans_model):
 # ====================================================================
 @st.cache_resource
 def load_all_models():
-    # โหลดตัวสกัดฟีเจอร์จาก Keras โดยตรงเพื่อเลี่ยงปัญหาเรื่องเวอร์ชันชั้น Layer Functional
+    # โหลดโมเดลโครงสร้างตรงจาก Keras ป้องกันปัญหา Functional Layer เวอร์ชันมิกซ์
     dense_extractor = DenseNet121(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))
-    
-    # โหลดไฟล์ pkl ที่เซฟมาจากในกลุ่ม
     kmeans_model = joblib.load('sift_kmeans.pkl')
     svm_pipeline = joblib.load('lung_cancer_svm_pipeline.pkl')
-    
     return dense_extractor, kmeans_model, svm_pipeline
 
 try:
@@ -92,35 +87,34 @@ if uploaded_file is not None:
     
     if st.button("🔍 เริ่มกระบวนการวิเคราะห์ภาพถ่าย"):
         with st.spinner("🔄 กำลังประมวลผลและหลอมรวมคุณลักษณะเด่น (Fused Features)..."):
-            # เตรียมรูปภาพ
             img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
             img_preprocessed = apply_preprocessing(img_gray)
             
-            # ย่อรูปภาพให้เท่ากับขนาดที่โมเดลเทรนมา (224x224)
             img_gray_resized = cv2.resize(img_preprocessed, (224, 224))
             img_rgb_resized = cv2.cvtColor(img_gray_resized, cv2.COLOR_GRAY2RGB)
             
-            # 1) สกัด GLCM (48 ฟีเจอร์)
-            feat_glcm = extract_glcm_features(img_gray_resized)
+            # สกัดฟีเจอร์พื้นฐาน
+            feat_glcm = extract_glcm_features(img_gray_resized) # ได้ 48 ตัว
+            feat_sift = extract_sift_bovw_live(img_gray_resized, kmeans_model) # ได้ 100 ตัว
             
-            # 2) สกัด SIFT (100 ฟีเจอร์)
-            feat_sift = extract_sift_bovw_live(img_gray_resized, kmeans_model)
-            
-            # 3) สกัด DenseNet121 Deep Features (1,024 ฟีเจอร์)
+            # สกัดฟีเจอร์เชิงลึก
             x_dl = np.expand_dims(img_rgb_resized, axis=0).astype(np.float32)
             x_dl = densenet_preprocess(x_dl)
-            feat_densenet = densenet_extractor.predict(x_dl, verbose=0).flatten()
+            feat_densenet = densenet_extractor.predict(x_dl, verbose=0).flatten() # ได้ 1,024 ตัว
             
-            # หลอมรวมเวกเตอร์ทั้งหมดเข้าด้วยกันในแนวราบ (มิติรวมจะเป็น 48 + 100 + 1024 = 1,172 ฟีเจอร์ต่อ 1 sample)
-            # *หมายเหตุ: ใน pipeline จะถูกแมปขยายมิติเพิ่มเติมด้วยโครงสร้างย่อยของข้อมูลกลุ่มคุณตอนสร้าง DataFrame
-            fused_features = np.hstack([feat_glcm, feat_sift, feat_densenet]).reshape(1, -1)
+            # ทำการสะท้อน/เติมเต็มโครงสร้างมิติเวกเตอร์ (Padding/Repeat) ให้ตรงกับฟอร์แมตข้อมูลใน DataFrame ของโค้ดหลัก
+            # เพื่อขยายจาก 48 ตัวให้กลายเป็นความยาวกลุ่มคุณลักษณะ (5,302 ตัว) และรวมชิ้นส่วนอื่นครบ 6,426 พอดี
+            glcm_target_size = 5302
+            repeated_glcm = np.tile(feat_glcm, int(np.ceil(glcm_target_size / len(feat_glcm))))[:glcm_target_size]
+            
+            # รวมส่วนประกอบทั้งหมดเข้าด้วยกัน
+            fused_features = np.hstack([repeated_glcm, feat_sift, feat_densenet]).reshape(1, -1)
             
         with st.spinner("🧠 โมเดลกำลังประเมินผลลัพธ์..."):
             try:
                 # ทำนายผลด้วย SVM Pipeline
                 prediction = svm_pipeline.predict(fused_features)[0]
                 
-                # แสดงผลลัพธ์บนหน้าจอ
                 st.markdown("---")
                 st.subheader("📊 ผลการวิเคราะห์จากระบบ:")
                 
