@@ -9,7 +9,10 @@ from skimage.feature import graycomatrix, graycoprops
 from tensorflow.keras.applications import DenseNet121
 from tensorflow.keras.applications.densenet import preprocess_input as densenet_preprocess
 
-# จำลองโครงสร้าง Class ของ SIFT เดิมในหน่วยความจำเพื่อให้ joblib โหลดข้อมูลได้ถูกต้อง
+# สร้างตัวแปร SIFT ไว้ใช้งานทั่วทั้งแอป
+sift = cv2.SIFT_create()
+
+#  [จุดแก้ไข] ประกาศคลาส SIFTBoVWExtractor แบบตัวเต็มเพื่อให้สกัดฟีเจอร์ SIFT บนแอปได้จริง
 from sklearn.cluster import MiniBatchKMeans
 class SIFTBoVWExtractor:
     def __init__(self, n_clusters=100, random_state=42):
@@ -17,9 +20,29 @@ class SIFTBoVWExtractor:
         self.random_state = random_state
         self.kmeans = None
 
+    def fit(self, gray_img_array):
+        return self
+
+    def transform(self, gray_img_array):
+        bovw_features = []
+        for img in gray_img_array:
+            _, descriptors = sift.detectAndCompute(img, None)
+            histogram = np.zeros(self.n_clusters, dtype=np.float32)
+            if descriptors is not None and len(descriptors) > 0:
+                preds = self.kmeans.predict(descriptors)
+                for p in preds:
+                    histogram[p] += 1.0
+                if histogram.sum() > 0:
+                    histogram = histogram / histogram.sum()
+            bovw_features.append(histogram)
+        return np.array(bovw_features, dtype=np.float32)
+
+#  [จุดแก้ไข] หลอกระบบ Streamlit ให้รู้จักคลาสนี้ในโมดูลหลักป้องกัน AttributeError ตอนโหลดโมเดล
+import __main__
+__main__.SIFTBoVWExtractor = SIFTBoVWExtractor
+
 # รายชื่อคลาสผลลัพธ์
 CLASS_NAMES = ['Normal cases', 'Benign cases', 'Malignant cases']
-sift = cv2.SIFT_create()
 
 # ====================================================================
 # ฟังก์ชันดึงและสกัดลักษณะเด่น (ดึงจากสมุดโน้ตเดิมของคุณ)
