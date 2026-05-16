@@ -12,7 +12,7 @@ from tensorflow.keras.applications.densenet import preprocess_input as densenet_
 st.set_page_config(page_title="Lung Cancer Classification", page_icon="🫁", layout="centered")
 
 st.title("🫁 Lung Cancer Classification App")
-st.write("ระบบวินิจฉัยมะเร็งปอดจากภาพถ่าย CT Scan ด้วยโมเดล GLCM + SIFT + DenseNet121 + SVM)")
+st.write("ระบบวินิจฉัยมะเร็งปอดจากภาพถ่าย CT Scan ด้วยโมเดล (GLCM + SIFT + DenseNet121 + SVM)")
 st.markdown("---")
 
 # ====================================================================
