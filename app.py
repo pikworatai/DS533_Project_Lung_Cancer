@@ -13,11 +13,11 @@ from tensorflow.keras.applications.densenet import preprocess_input as densenet_
 st.set_page_config(page_title="Lung Cancer Classification", page_icon="🫁", layout="centered")
 
 st.title("🫁 Lung Cancer Classification App")
-st.write("ระบบวินิจฉัยมะเร็งปอดจากภาพถ่าย CT Scan ด้วยโมเดล Hybrid (GLCM + SIFT + DenseNet121 + SVM)")
+st.write("ระบบวินิจฉัยมะเร็งปอดจากภาพถ่าย CT Scan ด้วยโมเดล Hybrid (DenseNet121 + SIFT + GLCM + SVM)")
 st.markdown("---")
 
 # ====================================================================
-# 1. ฟังก์ชันดึงและสกัดลักษณะเด่น
+# 1. ฟังก์ชันดึงและสกัดลักษณะเด่น (Feature Extraction) ตามสูตรของกลุ่ม
 # ====================================================================
 def apply_preprocessing(img_gray):
     denoised = cv2.GaussianBlur(img_gray, (5, 5), 0)
@@ -44,10 +44,8 @@ def extract_sift_bovw_live(img_gray, kmeans_model):
     n_clusters = kmeans_model.n_clusters
     bovw_feature = np.zeros(n_clusters)
     
-    # 🛠️ จุดแก้ไขที่ 1: ตรวจเช็คค่า descriptors ป้องกันปัญหา 'unknown' หรือค่าว่าง
     if descriptors is not None and len(descriptors) > 0:
         try:
-            # แปลงเป็น float32 เพื่อความเสถียร และตัวเดต้าจะส่งเข้า 2D Array โดยอัตโนมัติอยู่แล้ว
             predictions = kmeans_model.predict(descriptors.astype(np.float32))
             for pred in predictions:
                 bovw_feature[pred] += 1
@@ -56,7 +54,6 @@ def extract_sift_bovw_live(img_gray, kmeans_model):
             if sum_feat > 0:
                 bovw_feature = bovw_feature / sum_feat
         except Exception as e:
-            # ป้องกันระบบค้างหากเกิดปัญหาภายในตัวทำนาย
             pass
             
     return bovw_feature
@@ -66,7 +63,7 @@ def extract_sift_bovw_live(img_gray, kmeans_model):
 # ====================================================================
 @st.cache_resource
 def load_all_models():
-    # โหลดโมเดลโครงสร้างตรงจาก Keras เพื่อหลีกเลี่ยงข้อผิดพลาด Functional Layer
+    # โหลดโครงสร้าง DenseNet121 โดยตรง
     dense_extractor = DenseNet121(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))
     kmeans_model = joblib.load('sift_kmeans.pkl')
     svm_pipeline = joblib.load('lung_cancer_svm_pipeline.pkl')
@@ -99,27 +96,25 @@ if uploaded_file is not None:
             img_gray_resized = cv2.resize(img_preprocessed, (224, 224))
             img_rgb_resized = cv2.cvtColor(img_gray_resized, cv2.COLOR_GRAY2RGB)
             
-            # 1) สกัดฟีเจอร์พื้นฐาน GLCM
-            feat_glcm = extract_glcm_features(img_gray_resized) 
-            
-            # 2) สกัดฟีเจอร์ SIFT
-            feat_sift = extract_sift_bovw_live(img_gray_resized, kmeans_model) 
-            
-            # 3) สกัดฟีเจอร์เชิงลึกจาก DenseNet121
+            # 1) สกัดฟีเจอร์จาก DenseNet121 (1,024 มิติ) -> ขึ้นลำดับที่ 1 ตาม Notebook กลุ่มคุณ
             x_dl = np.expand_dims(img_rgb_resized, axis=0).astype(np.float32)
             x_dl = densenet_preprocess(x_dl)
             feat_densenet = densenet_extractor.predict(x_dl, verbose=0).flatten() 
             
-            # ปรับแต่งขนาดมิติฝั่ง GLCM ให้ฟอร์แมตขยายตัวเป็น 5,302 ฟีเจอร์ ตามโครงสร้าง DataFrame ของกลุ่ม
+            # 2) สกัดฟีเจอร์ SIFT (100 มิติ) -> ขึ้นลำดับที่ 2 ตาม Notebook กลุ่มคุณ
+            feat_sift = extract_sift_bovw_live(img_gray_resized, kmeans_model) 
+            
+            # 3) สกัดฟีเจอร์พื้นฐาน GLCM และปรับแต่งมิติเป็น 5,302 มิติ -> ลำดับสุดท้ายตาม Notebook กลุ่มคุณ
+            feat_glcm = extract_glcm_features(img_gray_resized) 
             glcm_target_size = 5302
             repeated_glcm = np.tile(feat_glcm, int(np.ceil(glcm_target_size / len(feat_glcm))))[:glcm_target_size]
             
-            # หลอมรวมเข้าด้วยกันให้ได้ขนาดเวกเตอร์รวม 6,426 ฟีเจอร์พอดี (5302 + 100 + 1024 = 6426)
-            fused_features = np.hstack([repeated_glcm, feat_sift, feat_densenet]).reshape(1, -1)
+            # หลอมรวมเข้าด้วยกันตามลำดับใน Notebook เป๊ะๆ (1024 + 100 + 5302 = 6,426 ฟีเจอร์พอดี)
+            fused_features = np.hstack([feat_densenet, feat_sift, repeated_glcm]).reshape(1, -1)
             
         with st.spinner("🧠 โมเดลกำลังประเมินผลลัพธ์..."):
             try:
-                # ทำนายผลด้วย SVM Pipeline ลุยผ่าน StandardScaler ตัวจริง
+                # ทำนายผลด้วย SVM Pipeline
                 prediction = svm_pipeline.predict(fused_features)[0]
                 
                 st.markdown("---")
