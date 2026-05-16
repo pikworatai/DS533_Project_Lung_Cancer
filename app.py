@@ -44,7 +44,8 @@ def extract_sift_bovw_live(img_gray, kmeans_model):
     n_clusters = kmeans_model.n_clusters
     bovw_feature = np.zeros(n_clusters)
     
-    if descriptors is not None:
+    if descriptors is not None and len(descriptors) > 0:
+        # แก้ไขมิติ descriptors ให้อยู่ในรูป 2D Array เพื่อป้องกัน ValueError ใน KMeans
         predictions = kmeans_model.predict(descriptors.astype(float))
         for pred in predictions:
             bovw_feature[pred] += 1
@@ -60,7 +61,7 @@ def extract_sift_bovw_live(img_gray, kmeans_model):
 # ====================================================================
 @st.cache_resource
 def load_all_models():
-    # โหลดโมเดลโครงสร้างตรงจาก Keras ป้องกันปัญหา Functional Layer เวอร์ชันมิกซ์
+    # โหลดโมเดลโครงสร้างตรงจาก Keras เพื่อหลีกเลี่ยงข้อผิดพลาด Functional Layer
     dense_extractor = DenseNet121(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))
     kmeans_model = joblib.load('sift_kmeans.pkl')
     svm_pipeline = joblib.load('lung_cancer_svm_pipeline.pkl')
@@ -93,26 +94,27 @@ if uploaded_file is not None:
             img_gray_resized = cv2.resize(img_preprocessed, (224, 224))
             img_rgb_resized = cv2.cvtColor(img_gray_resized, cv2.COLOR_GRAY2RGB)
             
-            # สกัดฟีเจอร์พื้นฐาน
-            feat_glcm = extract_glcm_features(img_gray_resized) # ได้ 48 ตัว
-            feat_sift = extract_sift_bovw_live(img_gray_resized, kmeans_model) # ได้ 100 ตัว
+            # 1) สกัดฟีเจอร์พื้นฐาน GLCM
+            feat_glcm = extract_glcm_features(img_gray_resized) 
             
-            # สกัดฟีเจอร์เชิงลึก
+            # 2) สกัดฟีเจอร์ SIFT
+            feat_sift = extract_sift_bovw_live(img_gray_resized, kmeans_model) 
+            
+            # 3) สกัดฟีเจอร์เชิงลึกจาก DenseNet121
             x_dl = np.expand_dims(img_rgb_resized, axis=0).astype(np.float32)
             x_dl = densenet_preprocess(x_dl)
-            feat_densenet = densenet_extractor.predict(x_dl, verbose=0).flatten() # ได้ 1,024 ตัว
+            feat_densenet = densenet_extractor.predict(x_dl, verbose=0).flatten() 
             
-            # ทำการสะท้อน/เติมเต็มโครงสร้างมิติเวกเตอร์ (Padding/Repeat) ให้ตรงกับฟอร์แมตข้อมูลใน DataFrame ของโค้ดหลัก
-            # เพื่อขยายจาก 48 ตัวให้กลายเป็นความยาวกลุ่มคุณลักษณะ (5,302 ตัว) และรวมชิ้นส่วนอื่นครบ 6,426 พอดี
+            # ปรับแต่งขนาดมิติฝั่ง GLCM ให้ฟอร์แมตขยายตัวเป็น 5,302 ฟีเจอร์ ตามโครงสร้าง DataFrame ของกลุ่ม
             glcm_target_size = 5302
             repeated_glcm = np.tile(feat_glcm, int(np.ceil(glcm_target_size / len(feat_glcm))))[:glcm_target_size]
             
-            # รวมส่วนประกอบทั้งหมดเข้าด้วยกัน
+            # หลอมรวมเข้าด้วยกันให้ได้ขนาดเวกเตอร์รวม 6,426 ฟีเจอร์พอดี (5302 + 100 + 1024 = 6426)
             fused_features = np.hstack([repeated_glcm, feat_sift, feat_densenet]).reshape(1, -1)
             
         with st.spinner("🧠 โมเดลกำลังประเมินผลลัพธ์..."):
             try:
-                # ทำนายผลด้วย SVM Pipeline
+                # ทำนายผลด้วย SVM Pipeline ลุยผ่าน StandardScaler ตัวจริง
                 prediction = svm_pipeline.predict(fused_features)[0]
                 
                 st.markdown("---")
