@@ -1,6 +1,6 @@
 streamlit
 Pillow
-tensorflow==2.16.1
+tensorflow==2.15.0
 opencv-python-headless
 scikit-learn
 scikit-image
