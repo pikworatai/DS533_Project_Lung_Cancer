@@ -9,43 +9,12 @@ from skimage.feature import graycomatrix, graycoprops
 from tensorflow.keras.applications import DenseNet121
 from tensorflow.keras.applications.densenet import preprocess_input as densenet_preprocess
 
-# สร้างตัวแปร SIFT ไว้ใช้งานทั่วทั้งแอป
+# สร้างตัวแปร SIFT สำหรับประมวลผล
 sift = cv2.SIFT_create()
-
-#  [จุดแก้ไข] ประกาศคลาส SIFTBoVWExtractor แบบตัวเต็มเพื่อให้สกัดฟีเจอร์ SIFT บนแอปได้จริง
-from sklearn.cluster import MiniBatchKMeans
-class SIFTBoVWExtractor:
-    def __init__(self, n_clusters=100, random_state=42):
-        self.n_clusters = n_clusters
-        self.random_state = random_state
-        self.kmeans = None
-
-    def fit(self, gray_img_array):
-        return self
-
-    def transform(self, gray_img_array):
-        bovw_features = []
-        for img in gray_img_array:
-            _, descriptors = sift.detectAndCompute(img, None)
-            histogram = np.zeros(self.n_clusters, dtype=np.float32)
-            if descriptors is not None and len(descriptors) > 0:
-                preds = self.kmeans.predict(descriptors)
-                for p in preds:
-                    histogram[p] += 1.0
-                if histogram.sum() > 0:
-                    histogram = histogram / histogram.sum()
-            bovw_features.append(histogram)
-        return np.array(bovw_features, dtype=np.float32)
-
-#  [จุดแก้ไข] หลอกระบบ Streamlit ให้รู้จักคลาสนี้ในโมดูลหลักป้องกัน AttributeError ตอนโหลดโมเดล
-import __main__
-__main__.SIFTBoVWExtractor = SIFTBoVWExtractor
-
-# รายชื่อคลาสผลลัพธ์
 CLASS_NAMES = ['Normal cases', 'Benign cases', 'Malignant cases']
 
 # ====================================================================
-# ฟังก์ชันดึงและสกัดลักษณะเด่น (ดึงจากสมุดโน้ตเดิมของคุณ)
+# ฟังก์ชันดึงและสกัดลักษณะเด่น
 # ====================================================================
 def apply_preprocessing(img_gray):
     denoised = cv2.GaussianBlur(img_gray, (5, 5), 0)
@@ -66,31 +35,44 @@ def extract_glcm_features(gray_img_array):
         features.append(feature_vector)
     return np.array(features, dtype=np.float32)
 
+def extract_sift_bovw_live(gray_img, kmeans_model):
+    # ดึงจำนวน Cluster จากตัว KMeans โดยตรง ป้องกันปัญหาเรื่องคลาสหาย
+    n_clusters = kmeans_model.n_clusters
+    _, descriptors = sift.detectAndCompute(gray_img, None)
+    
+    histogram = np.zeros(n_clusters, dtype=np.float32)
+    if descriptors is not None and len(descriptors) > 0:
+        preds = kmeans_model.predict(descriptors)
+        for p in preds:
+            histogram[p] += 1.0
+        if histogram.sum() > 0:
+            histogram = histogram / histogram.sum()
+            
+    return np.array([histogram], dtype=np.float32)
+
 def combine_features(*arrays):
     return np.concatenate(arrays, axis=1).astype(np.float32)
 
 # ====================================================================
-# ส่วนจัดโหลดโมเดลเข้าสู่ระบบแอปพลิเคชัน (Cached เพื่อความรวดเร็ว)
+# โหลดโมเดลเข้าสู่ระบบแอปพลิเคชัน (Cached เพื่อความรวดเร็ว)
 # ====================================================================
 @st.cache_resource
 def load_all_models():
-    # โหลดตัวสกัดดีปฟีเจอร์นิวรอนเน็ตเวิร์ก
     densenet_extractor = DenseNet121(weights='imagenet', include_top=False, pooling='avg')
     
-    # โหลดไฟล์โมเดลทั้งสองชิ้น (กรุณาวางไฟล์ .pkl ไว้ที่โฟลเดอร์เดียวกับไฟล์ app.py)
     pipeline_path = 'lung_cancer_svm_pipeline.pkl'
-    sift_path = 'sift_bovw_extractor.pkl'
+    kmeans_path = 'sift_kmeans.pkl'
     
-    if os.path.exists(pipeline_path) and os.path.exists(sift_path):
+    if os.path.exists(pipeline_path) and os.path.exists(kmeans_path):
         classifier = joblib.load(pipeline_path)
-        sift_bovw = joblib.load(sift_path)
+        kmeans_model = joblib.load(kmeans_path)
     else:
-        st.error("❌ หาไฟล์โมเดลพยากรณ์ (.pkl) ไม่พบในโฟลเดอร์ทำงานหลัก!")
-        classifier, sift_bovw = None, None
+        st.error("❌ ไม่พบไฟล์โมเดลพยากรณ์ (.pkl) ในโฟลเดอร์ทำงานหลักของ GitHub!")
+        classifier, kmeans_model = None, None
         
-    return densenet_extractor, classifier, sift_bovw
+    return densenet_extractor, classifier, kmeans_model
 
-densenet_extractor, classifier_model, sift_bovw_model = load_all_models()
+densenet_extractor, classifier_model, kmeans_model = load_all_models()
 
 # ====================================================================
 # โครงสร้างหน้าต่าง UI แอพเว็บ
@@ -100,32 +82,30 @@ st.write("ระบบวิเคราะห์จำแนกโรคจา�
 
 uploaded_file = st.file_uploader("กรุณาอัปโหลดไฟล์ภาพเอกซเรย์ของคุณ...", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None and classifier_model is not None and sift_bovw_model is not None:
+if uploaded_file is not None and classifier_model is not None and kmeans_model is not None:
     try:
-        # อ่านไฟล์และจำลองแสดงรูปภาพ
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption='รูปภาพที่อัปโหลดเข้าสู่ระบบ', use_container_width=True)
         
         with st.spinner("🔄 กำลังประมวลผลวิเคราะห์รูปภาพความละเอียดสูง..."):
-            # 1. ทำ Preprocessing 
             img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
             img_preprocessed = apply_preprocessing(img_gray)
             img_gray_resized = cv2.resize(img_preprocessed, (224, 224))
             img_rgb_resized = cv2.cvtColor(img_gray_resized, cv2.COLOR_GRAY2RGB)
             
-            # 2. เริ่มดึงสกัดคุณลักษณะเด่นแบบผสม (Feature Extraction)
+            # สกัดคุณลักษณะเด่นแบบผสม
             feat_glcm = extract_glcm_features([img_gray_resized])
-            feat_sift = sift_bovw_model.transform([img_gray_resized])
+            feat_sift = extract_sift_bovw_live(img_gray_resized, kmeans_model)
             
             x_dl = np.expand_dims(img_rgb_resized, axis=0).astype(np.float32)
             x_dl = densenet_preprocess(x_dl)
             feat_densenet = densenet_extractor.predict(x_dl, verbose=0)
             
-            # 3. หลอมรวมฟีเจอร์ (Feature Fusion)
+            # หลอมรวมฟีเจอร์ 
             fused_features = combine_features(feat_glcm, feat_sift, feat_densenet)
             
-            # 4. ส่งประมวลผลทำนายผลลัพธ์
+            # ส่งทำนายผลลัพธ์
             prediction = classifier_model.predict(fused_features)
             predicted_class_id = int(prediction[0])
             result_label = CLASS_NAMES[predicted_class_id]
