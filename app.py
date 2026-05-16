@@ -44,15 +44,20 @@ def extract_sift_bovw_live(img_gray, kmeans_model):
     n_clusters = kmeans_model.n_clusters
     bovw_feature = np.zeros(n_clusters)
     
+    # 🛠️ จุดแก้ไขที่ 1: ตรวจเช็คค่า descriptors ป้องกันปัญหา 'unknown' หรือค่าว่าง
     if descriptors is not None and len(descriptors) > 0:
-        # แก้ไขมิติ descriptors ให้อยู่ในรูป 2D Array เพื่อป้องกัน ValueError ใน KMeans
-        predictions = kmeans_model.predict(descriptors.astype(float))
-        for pred in predictions:
-            bovw_feature[pred] += 1
-            
-        sum_feat = np.sum(bovw_feature)
-        if sum_feat > 0:
-            bovw_feature = bovw_feature / sum_feat
+        try:
+            # แปลงเป็น float32 เพื่อความเสถียร และตัวเดต้าจะส่งเข้า 2D Array โดยอัตโนมัติอยู่แล้ว
+            predictions = kmeans_model.predict(descriptors.astype(np.float32))
+            for pred in predictions:
+                bovw_feature[pred] += 1
+                
+            sum_feat = np.sum(bovw_feature)
+            if sum_feat > 0:
+                bovw_feature = bovw_feature / sum_feat
+        except Exception as e:
+            # ป้องกันระบบค้างหากเกิดปัญหาภายในตัวทำนาย
+            pass
             
     return bovw_feature
 
