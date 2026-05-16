@@ -46,7 +46,7 @@ except Exception as e:
 # ====================================================================
 uploaded_file = st.file_uploader("เลือกรูปภาพผลเอกซเรย์คอมพิวเตอร์ (CT Scan)...", type=["jpg", "jpeg", "png"])
 
-CLASS_NAMES = ['Normal cases (ปกติ)', 'Benign cases (เนื้องอกชนิดธรรมดา)', 'Malignant cases (มะเร็งปอด)']
+CLASS_NAMES = ['Normal cases (ปกติ)', 'Bengin cases (เนื้องอกชนิดธรรมดา)', 'Malignant cases (มะเร็งปอด)']
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
