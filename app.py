@@ -13,6 +13,7 @@ st.set_page_config(page_title="Lung Cancer Classification", page_icon="🫁", la
 
 st.title("🫁 Lung Cancer Classification App")
 st.write("ระบบวินิจฉัยมะเร็งปอดจากภาพถ่าย CT Scan ด้วยโมเดล (GLCM + SIFT + DenseNet121 + SVM)")
+st.write("📌 หมายเหตุ: ใช้เพื่อการเรียนวิชา DS533 Computer Vision เท่านั้น")
 st.markdown("---")
 
 # ====================================================================
